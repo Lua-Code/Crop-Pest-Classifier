@@ -1,0 +1,41 @@
+# =====================
+# Project configuration meow :3
+# =====================
+
+project:
+  name: crop_pest_classifier
+  seed: 42
+
+paths:
+  data_dir: data
+  train_dir: data/train
+  test_dir: data/test
+  train_csv: data/train.csv
+  test_csv: data/test.csv
+  output_dir: runs
+
+data:
+  num_classes: 12
+  image_size: 224
+  batch_size: 32
+  num_workers: 2
+
+cross_validation:
+  k_folds: 5
+  shuffle: true
+
+features:
+  backbone: resnet18
+  pretrained: true
+  embedding_dim: 512
+
+training:
+  epochs: 30
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  early_stopping_patience: 5
+
+evaluation:
+  metrics:
+    - accuracy
+    - macro_f1
