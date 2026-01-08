@@ -74,7 +74,7 @@ def buildClassMapping(trainDf: pd.DataFrame) -> Dict[str, int]:
     classes = sorted(trainDf["label"].unique().tolist())
     return {clsName: idx for idx, clsName in enumerate(classes)}
 
-#
+
 def resolveImagePath(baseDir: Path, filename: str, label: Optional[str] = None) -> Path:
     p1 = baseDir / filename
     if p1.exists():
