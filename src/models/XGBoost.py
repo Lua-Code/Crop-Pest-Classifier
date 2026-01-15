@@ -9,7 +9,9 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import joblib
+import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import cupy as cp
 
 import xgboost as xgb
@@ -39,15 +41,12 @@ class XgbNdeConfig:
     outputDir: Path = Path("runs")
     seed: int = 42
 
-    # GPU
     gpuId: int = 0
 
-    # Early stopping (only used in stage 1)
     nEstimatorsCap: int = 3000
     earlyStoppingRounds: int = 50
-    valFolds: int = 10  # 1/10 validation split
+    valFolds: int = 10  
 
-    # Strong fast defaults for embeddings
     maxDepth: int = 5
     learningRate: float = 0.05
     subsample: float = 0.9
@@ -57,7 +56,6 @@ class XgbNdeConfig:
     regAlpha: float = 0.0
     gamma: float = 0.0
 
-    # Plot settings
     cmNormalize: str | None = None
 
 
@@ -73,6 +71,51 @@ def to_gpu(X: np.ndarray) -> "cp.ndarray":
 def gpu_params(cfg: XgbNdeConfig) -> Dict[str, Any]:
     return {"device": f"cuda:{cfg.gpuId}", "tree_method": "hist"}
 
+def saveFeatureImportance(
+    model: XGBClassifier,
+    outDir: Path,
+    topK: int = 30,
+    prefix: str = "xgb_nde",
+) -> None:
+
+    outDir.mkdir(parents=True, exist_ok=True)
+
+    booster = model.get_booster()
+
+    importanceType = "gain"  
+    scoreDict = booster.get_score(importance_type=importanceType)
+
+    nFeatures = model.n_features_in_
+    allFeatures = [f"f{i}" for i in range(nFeatures)]
+    gains = [float(scoreDict.get(f, 0.0)) for f in allFeatures]
+
+    df = pd.DataFrame({"feature": allFeatures, "gain": gains})
+    df.sort_values("gain", ascending=False, inplace=True)
+
+    csvPath = outDir / f"{prefix}_feature_importance_{importanceType}.csv"
+    df.to_csv(csvPath, index=False)
+
+    topDf = df.head(topK)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.barh(topDf["feature"][::-1], topDf["gain"][::-1])  # reversed for largest on top
+    ax.set_title(f"XGBoost Feature Importance ({importanceType}) - Top {topK}")
+    ax.set_xlabel("Importance (gain)")
+    ax.set_ylabel("Feature (embedding dim)")
+    fig.tight_layout()
+
+    pngPath = outDir / f"{prefix}_feature_importance_{importanceType}_top{topK}.png"
+    fig.savefig(pngPath, dpi=200)
+    plt.close(fig)
+
+    # Also save as JSON (optional)
+    jsonPath = outDir / f"{prefix}_feature_importance_{importanceType}.json"
+    jsonPath.write_text(df.to_json(orient="records", indent=2))
+
+    print("Saved feature importance:")
+    print(" ", csvPath)
+    print(" ", pngPath)
+    print(" ", jsonPath)
+
 
 def build_model(
     cfg: XgbNdeConfig,
@@ -80,11 +123,6 @@ def build_model(
     n_estimators: int,
     early_stopping_rounds: Optional[int] = None,
 ) -> XGBClassifier:
-    """
-    For XGBoost 3.1.2:
-    - early_stopping_rounds must be passed to the constructor (not fit, not callbacks)
-    - if early_stopping_rounds is set, fit MUST have eval_set
-    """
     kwargs = {}
     if early_stopping_rounds is not None:
         kwargs["early_stopping_rounds"] = int(early_stopping_rounds)
@@ -146,7 +184,6 @@ def main():
     X_va = to_gpu(Xtrain[vaIdx])
     y_va = ytrain[vaIdx]
 
-    # 2) Stage 1: Train with early stopping to find best trees
     print("\n=== Training (GPU + CuPy + EarlyStopping) ===")
     model_es = build_model(
         cfg,
@@ -165,19 +202,19 @@ def main():
     best_trees = (int(best_iter) + 1) if best_iter is not None else cfg.nEstimatorsCap
     print("Best iteration (trees):", best_trees)
 
-    # 3) Stage 2: Refit on full train WITHOUT early stopping
+    
     print("\n=== Refit on full train with best trees ===")
     final_model = build_model(
         cfg,
         numClasses=numClasses,
         n_estimators=best_trees,
-        early_stopping_rounds=None,   # ✅ disable early stopping here
+        early_stopping_rounds=None,   
     )
 
     Xtrain_gpu = to_gpu(Xtrain)
     final_model.fit(Xtrain_gpu, ytrain, verbose=False)
 
-    # 4) Evaluate on test
+    # Evaluate on test
     print("\n=== Final evaluation on provided test set ===")
     Xtest_gpu = to_gpu(Xtest)
     testPred = final_model.predict(Xtest_gpu)
